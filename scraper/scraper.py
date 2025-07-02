@@ -8,10 +8,11 @@ import time
 import schedule
 from datetime import datetime
 from typing import Dict, List, Any, Optional
-from firecrawl.firecrawl import FirecrawlApp
+from firecrawl import FirecrawlApp
 from database import DatabaseManager, ScrapedContent, ScrapeJob
 from config import Config
 import click
+import sys
 
 # Setup logging
 logging.basicConfig(
@@ -28,7 +29,11 @@ class WebScraper:
     """Main web scraper application."""
     
     def __init__(self):
-        self.firecrawl = FirecrawlApp(api_url=Config.FIRECRAWL_URL)
+        # For local Firecrawl, use a dummy API key
+        self.firecrawl = FirecrawlApp(
+            api_key="dummy-key-for-local-use", 
+            api_url=Config.FIRECRAWL_URL
+        )
         self.db = DatabaseManager()
         self.db.create_tables()
         logger.info("WebScraper initialised")
@@ -40,28 +45,36 @@ class WebScraper:
         try:
             logger.info(f"Scraping URL: {url}")
             
-            scrape_options = {"formats": formats}
-            
-            # Add structured extraction if schema provided
+            # Use the updated API for firecrawl-py 2.x
             if extract_schema:
-                scrape_options["jsonOptions"] = {"schema": extract_schema}
+                # For structured extraction, add json format
                 if "json" not in formats:
                     formats.append("json")
-                    scrape_options["formats"] = formats
+                
+                from firecrawl import JsonConfig
+                json_config = JsonConfig(schema=extract_schema)
+                
+                result = self.firecrawl.scrape_url(
+                    url, 
+                    formats=formats,
+                    json_options=json_config
+                )
+            else:
+                result = self.firecrawl.scrape_url(url, formats=formats)
             
-            result = self.firecrawl.scrape_url(url, **scrape_options)
-            
-            if result:
+            if result and hasattr(result, 'data'):
+                data = result.data
+                
                 # Prepare data for database
                 content_data = {
                     "url": url,
-                    "title": result.metadata.get("title") if result.metadata else None,
-                    "content": result.markdown if hasattr(result, 'markdown') else None,
-                    "html_content": result.html if hasattr(result, 'html') else None,
-                    "metadata": result.metadata if result.metadata else {},
-                    "extracted_data": result.json if hasattr(result, 'json') else None,
-                    "content_type": self._detect_content_type(url, result),
-                    "word_count": len(result.markdown.split()) if hasattr(result, 'markdown') and result.markdown else 0
+                    "title": data.get("metadata", {}).get("title") if data.get("metadata") else None,
+                    "content": data.get("markdown"),
+                    "html_content": data.get("html"),
+                    "page_metadata": data.get("metadata", {}),
+                    "extracted_data": data.get("json"),
+                    "content_type": self._detect_content_type(url, data),
+                    "word_count": len(data.get("markdown", "").split()) if data.get("markdown") else 0
                 }
                 
                 # Save to database
@@ -77,7 +90,7 @@ class WebScraper:
             logger.error(f"Error scraping URL {url}: {e}")
             return None
     
-    def _detect_content_type(self, url: str, result) -> str:
+    def _detect_content_type(self, url: str, data: dict) -> str:
         """Detect the type of content based on URL and result."""
         url_lower = url.lower()
         
@@ -95,6 +108,20 @@ class WebScraper:
     def get_stats(self) -> Dict:
         """Get scraping statistics."""
         return self.db.get_content_stats()
+    
+    def run_daemon(self):
+        """Run as a background daemon service."""
+        logger.info("Starting scraper daemon...")
+        logger.info("Scraper is ready and waiting for commands.")
+        logger.info("Use 'docker-compose exec scraper python scraper.py scrape <URL>' to scrape")
+        
+        # Keep the service running
+        try:
+            while True:
+                time.sleep(60)  # Check every minute
+                # You could add scheduled scraping here if needed
+        except KeyboardInterrupt:
+            logger.info("Daemon stopped by user")
 
 # CLI Interface
 @click.group()
@@ -130,6 +157,12 @@ def stats():
     click.echo(f"   Completed jobs: {stats['completed_jobs']}")
     click.echo(f"   Success rate: {stats['success_rate']:.2%}")
 
+@cli.command()
+def daemon():
+    """Run as background daemon service."""
+    scraper = WebScraper()
+    scraper.run_daemon()
+
 if __name__ == "__main__":
     # Validate configuration
     try:
@@ -138,5 +171,10 @@ if __name__ == "__main__":
         logger.error(f"Configuration error: {e}")
         exit(1)
     
-    # Run CLI
-    cli()
+    # If no arguments provided, run as daemon
+    if len(sys.argv) == 1:
+        scraper = WebScraper()
+        scraper.run_daemon()
+    else:
+        # Run CLI
+        cli()

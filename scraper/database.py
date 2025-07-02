@@ -21,7 +21,7 @@ class ScrapedContent(Base):
     title = Column(String, nullable=True)
     content = Column(Text, nullable=True)
     html_content = Column(Text, nullable=True)
-    metadata = Column(JSON, nullable=True)
+    page_metadata = Column(JSON, nullable=True)  # ← FIXED: renamed from 'metadata'
     extracted_data = Column(JSON, nullable=True)
     source_name = Column(String, nullable=True)
     content_type = Column(String, nullable=True)

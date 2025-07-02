@@ -18,5 +18,5 @@ COPY . .
 # Create logs directory
 RUN mkdir -p logs
 
-# Run the application
-CMD ["python", "scraper.py"]
+# Keep container running (instead of running scraper.py immediately)
+CMD ["tail", "-f", "/dev/null"]
