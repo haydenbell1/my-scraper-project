@@ -1,0 +1,97 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: scraper_db
+      POSTGRES_USER: scraper
+      POSTGRES_PASSWORD: scraper_password
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U scraper"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Redis for Firecrawl
+  redis:
+    image: redis:alpine
+    command: redis-server --bind 0.0.0.0
+    ports:
+      - "6379:6379"
+
+  # Firecrawl Playwright Service
+  firecrawl-playwright:
+    build: ./firecrawl/apps/playwright-service-ts
+    environment:
+      PORT: 3000
+    networks:
+      - scraper-network
+
+  # Firecrawl API
+  firecrawl-api:
+    build: ./firecrawl/apps/api
+    environment:
+      HOST: "0.0.0.0"
+      PORT: 3002
+      REDIS_URL: redis://redis:6379
+      REDIS_RATE_LIMIT_URL: redis://redis:6379
+      PLAYWRIGHT_MICROSERVICE_URL: http://firecrawl-playwright:3000/scrape
+      USE_DB_AUTHENTICATION: false
+      BULL_AUTH_KEY: your-secret-key
+      # Optional: Add OpenAI key for AI features
+      # OPENAI_API_KEY: sk-your-openai-key
+    ports:
+      - "3002:3002"
+    depends_on:
+      - redis
+      - firecrawl-playwright
+    networks:
+      - scraper-network
+
+  # Firecrawl Worker
+  firecrawl-worker:
+    build: ./firecrawl/apps/api
+    environment:
+      REDIS_URL: redis://redis:6379
+      PLAYWRIGHT_MICROSERVICE_URL: http://firecrawl-playwright:3000/scrape
+      USE_DB_AUTHENTICATION: false
+    command: ["pnpm", "run", "workers"]
+    depends_on:
+      - redis
+      - firecrawl-playwright
+    networks:
+      - scraper-network
+
+  # Your Scraper Application
+  scraper:
+    build: ./scraper
+    environment:
+      DATABASE_URL: postgresql://scraper:scraper_password@db:5432/scraper_db
+      FIRECRAWL_URL: http://firecrawl-api:3002
+      REDIS_URL: redis://redis:6379
+    volumes:
+      - ./scraper:/app
+      - ./data/logs:/app/logs
+    depends_on:
+      db:
+        condition: service_healthy
+      firecrawl-api:
+        condition: service_started
+    networks:
+      - scraper-network
+    # Uncomment to run in interactive mode
+    # stdin_open: true
+    # tty: true
+
+networks:
+  scraper-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
