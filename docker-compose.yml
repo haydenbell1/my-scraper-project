@@ -24,34 +24,52 @@ services:
     command: redis-server --bind 0.0.0.0
     ports:
       - "6379:6379"
+    networks:
+      - backend
 
-  # Firecrawl - All-in-one with official image
-  firecrawl:
-    image: mendableai/firecrawl:latest
+  # Firecrawl Playwright Service (still needs to be built)
+  playwright-service:
+    build: ./firecrawl/apps/playwright-service-ts
     environment:
-      # Core settings
+      PORT: 3000
+    networks:
+      - backend
+
+  # Firecrawl API (using official pre-built image - much faster!)
+  firecrawl-api:
+    image: ghcr.io/mendableai/firecrawl:latest
+    environment:
       HOST: "0.0.0.0"
       PORT: 3002
       REDIS_URL: redis://redis:6379
       REDIS_RATE_LIMIT_URL: redis://redis:6379
-      
-      # Authentication (disable for local use)
+      PLAYWRIGHT_MICROSERVICE_URL: http://playwright-service:3000/scrape
       USE_DB_AUTHENTICATION: false
       BULL_AUTH_KEY: your-secret-key
-      
       # Optional: Add OpenAI key for AI features
       # OPENAI_API_KEY: sk-your-openai-key
-      
-      # Rate limiting
-      RATE_LIMIT_TEST_MODE: true
-      
     ports:
       - "3002:3002"
     depends_on:
       - redis
-    volumes:
-      # Optional: Custom configuration
-      - ./firecrawl-config:/app/config
+      - playwright-service
+    networks:
+      - backend
+    restart: unless-stopped
+
+  # Firecrawl Worker (using same pre-built image)
+  firecrawl-worker:
+    image: ghcr.io/mendableai/firecrawl:latest
+    environment:
+      REDIS_URL: redis://redis:6379
+      PLAYWRIGHT_MICROSERVICE_URL: http://playwright-service:3000/scrape
+      USE_DB_AUTHENTICATION: false
+    command: ["pnpm", "run", "workers"]
+    depends_on:
+      - redis
+      - playwright-service
+    networks:
+      - backend
     restart: unless-stopped
 
   # Your Scraper Application
@@ -59,7 +77,7 @@ services:
     build: ./scraper
     environment:
       DATABASE_URL: postgresql://scraper:scraper_password@db:5432/scraper_db
-      FIRECRAWL_URL: http://firecrawl:3002
+      FIRECRAWL_URL: http://firecrawl-api:3002
       REDIS_URL: redis://redis:6379
     volumes:
       - ./scraper:/app
@@ -67,12 +85,18 @@ services:
     depends_on:
       db:
         condition: service_healthy
-      firecrawl:
+      firecrawl-api:
         condition: service_started
+    networks:
+      - backend
     restart: unless-stopped
     # Uncomment for interactive mode
     # stdin_open: true
     # tty: true
+
+networks:
+  backend:
+    driver: bridge
 
 volumes:
   postgres_data:
