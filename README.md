@@ -1,6 +1,6 @@
 # My Web Scraper Project
 
-A web scraping application using local Firecrawl and PostgreSQL database.
+A web scraping application using local Firecrawl and PostgreSQL database. Will integrate social media api in future..
 
 ## Features
 
